@@ -1,0 +1,794 @@
+---
+title: "M4T3"
+author: "Damilola"
+date: "26 February 2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+-------------#WiFi Location------------
+
+# Introduction
+
+Investigating a person's in-door location using WiFi fingerprint. Our role is to evaluate multiple machine learning model to see which produces the best result in determining a person's location in an indoor space which will enable us to make a recommendations.
+
+#Goal
+
+To Predict location (building no, floor, latitude and longitude) of a person based on the connection and strength of the signal of the connection to the WAPS.
+
+#Data Description
+
+The data consist of 21048 records.The records are split into training and validation set. The training set consists of 19937 records while the validation set consist of 1111 records respectively.
+
+#Attribute in the dataset
+
+1.  001-520 RSSI levels
+
+2.  521-523 Real world cordinate of the sample
+
+3.  524 BuildingID
+
+4.  525 SpaceID
+
+5.  526 Relative position with respect to SpaceID
+
+6.  527 UserID
+
+7.  528 PhoneID
+
+8.  529 Timestamp
+
+#Importing the libraries
+
+```{r}
+### ---- Libraries ----
+library('pacman')
+
+p_load(dplyr,tidyr, ggplot2, plotly,lubridate,
+       readr,caret,mlbench,tidyverse,gridExtra,data.table)
+```
+
+
+```{r}
+# ---- Import WiFi Training and Validation Data 
+
+WifiTData <- read.csv("trainingData.csv")
+
+WifiVData <- read.csv("validationData.csv")
+
+```
+
+Here, 19937 records are in the training data while 1111 records are in the validation data...
+
+```{r}
+# ---- Data Exploration ----
+## Inspect the Data Types for the Train Data
+summary(WifiTData[,520:529])
+str(WifiTData[,520:529])
+```
+
+```{r}
+#Check for missing value
+#is.na(WifiTData)#no missing value
+```
+
+```{r}
+# Removing duplicated Rows (#637 duplicated)
+WifiTData <- distinct(WifiTData)
+```
+
+# The data shows that there were 637 duplicated rows removed,from 19937 to 19300...
+
+```{r}
+# Transformation
+
+factors <-c("SPACEID","USERID","PHONEID","RELATIVEPOSITION", "BUILDINGID","FLOOR")
+
+WifiTData[, factors] <-lapply(WifiTData[, factors], as.factor)
+
+numeric <-c("LONGITUDE", "LATITUDE")
+WifiTData[,numeric]<-lapply(WifiTData[,numeric],as.numeric)
+
+#Convert Timestamp to DateTime
+WifiTData$TIMESTAMP <- as_datetime(WifiTData$TIMESTAMP,origin  =  "1970-01-01",tz = "GMT")
+```
+
+This code above is manipulating a dataset called "WifiTData" and performing the following tasks:
+
+Define a vector called "factors" that contains the names of categorical variables in the dataset: "SPACEID", "USERID", "PHONEID", "RELATIVEPOSITION", "BUILDINGID", and "FLOOR".
+
+Use the "lapply" function to convert all columns in "WifiTData" that match the names in "factors" to factors using the "as.factor" function.
+
+Define a vector called "numeric" that contains the names of numerical variables in the dataset: "LONGITUDE" and "LATITUDE".
+
+Use the "lapply" function to convert all columns in "WifiTData" that match the names in "numeric" to numeric using the "as.numeric" function.
+
+Convert the "TIMESTAMP" column in "WifiTData" from a Unix timestamp (number of seconds since 1970-01-01 00:00:00 UTC) to a datetime object using the "as_datetime" function. The origin argument specifies the starting point for the timestamp, and the tz argument specifies the time zone. In this case, the starting point is 1970-01-01 and the time zone is GMT.
+
+
+```{r}
+#change value of WAPs =100 to WAPs =-105
+
+WAPS<-grep("WAP",names(WifiTData),value = TRUE)
+WifiTData[,WAPS] <- sapply(WifiTData[,WAPS],function(x) ifelse(x==100,-105,x))
+```
+
+Here,is selecting all column names in the "WifiTData" dataset that contain the string "WAP" and storing them in a new vector called "WAPS". The "grep" function is used to find these column names by searching for the string "WAP" in the names of the data set.
+
+Then, the code uses the "sapply" function to apply a function to all columns in "WifiTData" that match the names in "WAPS". The function checks if the value in each cell of the column is equal to 100. If it is, the function replaces the value with -105. Otherwise, it leaves the value unchanged.
+
+In other words, this code is checking for any WiFi access points (WAPs) that have a value of 100 in the dataset and changing them to -105. This could be useful if, for example, the value of 100 indicates a missing value or an error in the data, and -105 is a more appropriate value to use in these cases.
+
+
+
+```{r}
+#function to get the absolute value of the difference of position x and the minimum position 
+WifiTData_Prep<-copy(WifiTData)
+getRelativeCoord = function(x,y){
+  return(abs(x-y))
+}
+
+#Normalizing Longitude and Latitude to Relative coordinates in relative to the minmum values of Lat and Long
+
+longMin = min(WifiTData$LONGITUDE)
+latMin = min(WifiTData$LATITUDE)
+
+WifiTData$RelativeLongitude <-WifiTData$LONGITUDE -longMin
+WifiTData$RelativeLatitude <- WifiTData$LATITUDE -latMin
+
+WifiTData_Prep$LATITUDE =  apply(WifiTData%>%select(., LATITUDE),1,getRelativeCoord, y=latMin)
+WifiTData_Prep$LONGITUDE = apply(WifiTData%>%select(.,LONGITUDE),1,getRelativeCoord, y=longMin)
+
+```
+
+The code  above defines a function called "getRelativeCoord" that calculates the absolute difference between two values.
+
+Then, the code determines the minimum values of the "LONGITUDE" and "LATITUDE" columns in "WifiTData" using the "min" function and stores them in the variables "longMin" and "latMin", respectively.
+
+Next, the code uses the "apply" function to create new columns in "WifiTData_Prep" called "LATITUDE" and "LONGITUDE". The "apply" function applies the "getRelativeCoord" function to each row of the "LATITUDE" and "LONGITUDE" columns in "WifiTData", using the minimum values of "LATITUDE" and "LONGITUDE" as the second argument "y". This effectively normalizes the "LONGITUDE" and "LATITUDE" columns to relative coordinates in relation to the minimum values of "LATITUDE" and "LONGITUDE".
+
+Note that the original code commented out two lines that perform the same calculation and add new columns to the original dataset "WifiTData". Instead, this code creates a new dataset "WifiTData_Prep" with the normalized values for "LATITUDE" and "LONGITUDE".
+
+
+```{r}
+#Create A new column for Max signal, and WAPs that has the highest signal
+
+WifiTData_Prep = WifiTData_Prep%>%
+  rowwise()%>%
+  dplyr::mutate(MAXSIGNAL = max(c_across(starts_with('WAP'))),
+         MAXWAP = names(WifiTData_Prep[which.max(c_across(starts_with('WAP')))]))
+
+#Check for WAPs that didn't detect any signal throughout the records : constant variables
+noWAPSignals = which(apply(WifiTData_Prep[,1:520],2,var) == 0)
+
+#check for observations(rows) with no signals using MAXSIGNAL Column
+noObsSignal = which(WifiTData_Prep$MAXSIGNAL == -105)
+
+#Remove no signal from the data
+WifiTData_Prep = WifiTData_Prep[,-noWAPSignals]
+WifiTData_Prep= WifiTData_Prep[-noObsSignal,]
+
+#check near zero variance
+nzv = which(apply(WifiTData_Prep%>%select(starts_with('WAP')),2,var) < 0.8)
+
+WifiTData_Prep = WifiTData_Prep[,-nzv]
+
+#head(WifiTData_Prep)#346  columns
+```
+
+Above is performing several steps to clean and prepare the "WifiTData_Prep" dataset for analysis.
+
+First, the code uses the "rowwise" function from the dplyr package to create a new column in "WifiTData_Prep" called "MAXSIGNAL", which contains the maximum value of all the "WAP" columns in each row. It also creates a new column called "MAXWAP", which contains the name of the "WAP" column that has the highest signal in each row.
+
+Next, the code identifies which "WAP" columns have zero variance, which means they have no signal throughout the entire dataset. The code stores the indices of these columns in the "noWAPSignals" variable.
+
+Then, the code identifies which rows in "WifiTData_Prep" have no signal at all, which means their "MAXSIGNAL" value is -105 (which was set as a replacement value in an earlier step). The code stores the indices of these rows in the "noObsSignal" variable.
+
+Finally, the code removes the "WAP" columns with zero variance and the rows with no signal from the "WifiTData_Prep" dataset, effectively removing irrelevant or erroneous data from the dataset. The resulting "WifiTData_Prep" dataset should be cleaner and more useful for analysis.
+
+```{r}
+#Check for misplaced WAPs in Multiple Building
+
+filtWAP = WifiTData_Prep%>%
+  select(BUILDINGID,MAXWAP)%>%
+  distinct()
+  
+
+WapsInMultipleBuilding = data.frame()
+for (wap in filtWAP$MAXWAP) {
+  
+  result = filtWAP%>%filter(MAXWAP == wap & BUILDINGID %in% c(0,1,2))
+  if (nrow(result) > 1){
+    WapsInMultipleBuilding = rbind(WapsInMultipleBuilding,result)
+  }
+}
+WapsInMultipleBuilding = WapsInMultipleBuilding%>%distinct()
+
+indexs = integer()
+for (y in 1:nrow(WapsInMultipleBuilding)) {
+  a = WapsInMultipleBuilding[y,1]
+  b= WapsInMultipleBuilding[y,2]
+ result = which(WifiTData_Prep$MAXWAP == b[[1]] & WifiTData_Prep$BUILDINGID == a[[1]])
+ indexs = append(indexs,result)
+}
+
+
+```
+
+The code above is performing several steps to identify and visualize the Wi-Fi Access Points (WAPs) that are present in multiple buildings.
+
+First, the code creates a new dataframe called "filtWAP" by selecting the "BUILDINGID" and "MAXWAP" columns from "WifiTData_Prep" and removing any duplicate rows using the "distinct" function.
+
+Next, the code initializes an empty dataframe called "WapsInMultipleBuilding" and uses a "for" loop to iterate through each unique WAP in "filtWAP". For each WAP, the code checks if it is present in more than one building (i.e., if there are multiple rows with the same "MAXWAP" value and different "BUILDINGID" values in "filtWAP"). If the WAP is present in multiple buildings, the code adds the relevant row(s) from "filtWAP" to the "WapsInMultipleBuilding" dataframe using the "rbind" function. The resulting "WapsInMultipleBuilding" dataframe should contain a list of all the WAPs that are present in multiple buildings.
+
+Then, the code uses another "for" loop to iterate through each row in "WapsInMultipleBuilding" and extract the corresponding rows from "WifiTData_Prep" that match the WAP and BUILDINGID values in that row. The code stores the indices of these rows in the "indexs" variable.
+
+Finally, the code creates a new dataframe called "observedWAP" by selecting the "WAP" columns (which are columns 466 through 476 in "WifiTData_Prep") from the rows in "WifiTData_Prep" that are indexed by the "indexs" variable. The code then creates a plot of the "observedWAP" dataframe, which should show the signal strengths of each WAP over time. This plot can help visualize any patterns or anomalies in the data for the WAPs that are present in multiple buildings.
+
+
+```{r}
+#To count the building id
+ggplot(WifiTData_Prep, aes(x=BUILDINGID)) + geom_bar(fill="lightblue")
+```
+
+
+```{r}
+plot = ggplot(WifiTData_Prep)
+color =c('pink','blue','magenta','orange')
+plot+geom_point(aes(x=LATITUDE,y=LONGITUDE,color=FLOOR))+
+  labs(title = 'Distribution of Latitude and Longitude')
+
+plot_ly(data=WifiTData_Prep,x= ~LATITUDE,y=~LONGITUDE,z=~FLOOR,type = "scatter3d",mode="markers",color=~FLOOR,size = 0.5)%>%layout('3D LAT AND LONG')
+```
+
+
+```{r}
+ggplot(WifiTData_Prep, aes( x = LATITUDE, y = LONGITUDE, group=FLOOR, colour = FLOOR)) +
+  geom_point( stat='summary', fun.y=sum) +
+  stat_summary(fun.ymax =sum, geom="line") + 
+  facet_grid( c("FLOOR", "BUILDINGID" ) )
+```
+```{r}
+ggplot(WifiTData_Prep, aes( x = LATITUDE, y = LONGITUDE, group=MAXSIGNAL, colour = MAXSIGNAL)) +
+  geom_point( stat='summary', fun.y=sum) +
+  stat_summary(fun.ymax =sum, geom="line") + 
+  facet_grid( c("RELATIVEPOSITION", "BUILDINGID" ) )
+```
+
+
+```{r}
+#Are there same MAXWAP in different Buildings?
+WAPS_Recoloc<-WifiTData_Prep%>%
+  select(MAXWAP,MAXSIGNAL)%>%
+  distinct(MAXWAP,MAXSIGNAL )
+
+#RepWAPS<-WAPS_Recoloc %>% distinct(MAXWAP,MAXSIGNAL)
+#RepWAPS<-sort(RepWAPS$MAXWAP[duplicated(RepWAPS$MAXWAP)])
+#RepWAPS
+```
+
+
+```{r}
+WifiTData_Prep %>% 
+  filter(BUILDINGID == 0) %>% 
+  group_by(FLOOR) %>% 
+  ggplot(aes(LONGITUDE, LATITUDE)) +
+  geom_point(color = "brown") +
+  facet_wrap(~FLOOR) +
+  labs(title = "Building 0 by Floor")
+
+```
+
+#Modelling    
+```{r}
+data_model= WifiTData_Prep%>%select(starts_with('WAP'),BUILDINGID,FLOOR,LATITUDE,LONGITUDE)
+predictors =data_model%>%select(starts_with('WAP'))
+
+pca2 <- prcomp(predictors, scale. = T)
+
+
+pca_buildings = cbind(pca2$x[,1:72],as.data.frame(data_model%>%select(BUILDINGID)))
+pca_floors = cbind(pca2$x[,1:72],as.data.frame(data_model%>%select(FLOOR)))
+pca_lat = cbind(pca2$x[,1:72],as.data.frame(data_model%>%select(LATITUDE)))
+pca_long = cbind(pca2$x[,1:72],as.data.frame(data_model%>%select(LONGITUDE)))
+
+set.seed(123)
+#Splitting data into train and testing(evaluate)
+
+indicesTraining <-createDataPartition(pca_buildings$BUILDINGID, p = 0.75, list = FALSE)
+wifiTrain <-pca_buildings[indicesTraining, ] # Training Test 75 %
+wifiTest <-pca_buildings[-indicesTraining, ]
+
+
+#create 10 fold cross validation 
+fitControl <- trainControl(method = "repeatedcv",number = 10, repeats = 3,allowParallel = TRUE)
+
+```
+
+#KNN for BUILDINGID
+```{r}
+set.seed(123)
+
+
+knn_build <- train(BUILDINGID ~., data = wifiTrain,method = "knn",trControl = fitControl
+                   ,tuneGrid =expand.grid(k=c(1,3)))
+knn_build
+
+```
+```{r}
+ggplot(knn_build) + labs(title = 'KNN model performance')
+```
+#PREDICTION FOR BUILDING
+```{r}
+# Using the model to predict the BUILDINGID on the testing Data
+pred_BL <- predict(knn_build, wifiTest)
+
+plot(pred_BL)
+confusionMatrix(data=wifiTest$BUILDINGID, reference = pred_BL)
+saveRDS(knn_build, file = "knnBL.rds")
+```
+
+
+```{r}
+set.seed(123)
+#Splitting data into train and testing(evaluate)
+
+indicesTraining2 <-createDataPartition(pca_floors$FLOOR, p = 0.75, list = FALSE)
+wifiTrain2 <-pca_floors[indicesTraining2, ] # Training Test 75 %
+wifiTest2 <-pca_floors[-indicesTraining2, ]
+
+
+#create 10 fold cross validation 
+fitControl <- trainControl(method = "repeatedcv",number = 10, repeats = 3,allowParallel = TRUE)
+
+
+set.seed(123)
+
+
+knn_buildFL <- train(FLOOR ~., data = wifiTrain2,method = "knn",trControl = fitControl
+                   ,tuneGrid =expand.grid(k=c(1,3)))
+print(knn_buildFL)
+```
+
+
+```{r}
+ggplot(knn_buildFL) + labs(title = 'KNN model performance')
+```
+```{r}
+# Using the model to predict the FLOOR on the testing Data
+pred_FL <- predict(knn_buildFL, wifiTest2)
+
+plot(pred_FL)
+confusionMatrix(data = wifiTest2$FLOOR, reference = pred_FL)
+saveRDS(knn_buildFL, file = "knnFL.rds")
+```
+
+#KNN with LAT
+```{r}
+set.seed(123)
+#Splitting data into train and testing(evaluate)
+
+indicesTraining3 <-createDataPartition(pca_lat$LATITUDE, p = 0.75, list = FALSE)
+wifiTrain3 <-pca_lat[indicesTraining3, ] # Training Test 75 %
+wifiTest3 <-pca_lat[-indicesTraining3, ]
+
+
+#create 10 fold cross validation 
+fitControl <- trainControl(method = "repeatedcv",number = 10, repeats = 3,allowParallel = TRUE)
+
+
+set.seed(123)
+
+
+knn_buildLT <- train(LATITUDE ~., data = wifiTrain3,method = "knn",trControl = fitControl
+                   ,tuneGrid =expand.grid(k=c(1,3)))
+print(knn_buildLT)
+
+```
+```{r}
+ggplot(knn_buildLT) + labs(title = 'KNN model performance')
+```
+
+```{r}
+# Using the model to predict the LATITUDE on the testing Data
+pred_LAT <- predict(knn_buildLT, wifiTest3)
+RMSE(pred = pred_LAT,wifiTest3$LATITUDE)
+MAE(pred = pred_LAT,wifiTest3$LATITUDE)
+cor(wifiTest3$LATITUDE,pred_LAT)#To calculate correlation coefficient
+saveRDS(knn_buildLT, file = "knnLAT.rds")
+```
+
+
+```{r}
+set.seed(123)
+#Splitting data into train and testing(evaluate)
+
+indicesTraining4 <-createDataPartition(pca_long$LONGITUDE, p = 0.75, list = FALSE)
+wifiTrain4 <-pca_long[indicesTraining4, ] # Training Test 75 %
+wifiTest4 <-pca_long[-indicesTraining4, ]
+
+
+#create 10 fold cross validation 
+fitControl <- trainControl(method = "repeatedcv",number = 10, repeats = 3,allowParallel = TRUE)
+
+
+set.seed(123)
+
+
+knn_buildLG <- train(LONGITUDE ~., data = wifiTrain4,method = "knn",trControl = fitControl
+                   ,tuneGrid =expand.grid(k=c(1,3)))
+print(knn_buildLG)
+
+# Using the model to predict the Longitude on the testing Data
+
+pred_LONG <- predict(knn_buildLG, wifiTest4)
+RMSE(pred = pred_LONG,wifiTest4$LONGITUDE)
+MAE(pred = pred_LONG,wifiTest4$LONGITUDE)
+cor(wifiTest4$LONGITUDE,pred_LONG)
+saveRDS(knn_buildLG, file = "knnLONG.rds")
+```
+
+
+```{r}
+#Gradient Boosting
+
+set.seed(123)
+
+gbmGrid <-  expand.grid(interaction.depth = c(1,2,3), 
+                        n.trees = (1:4)*50, 
+                        shrinkage = 0.1,
+                        n.minobsinnode = 10)
+
+gbFitBL <- train(BUILDINGID~. ,data=wifiTrain, method = "gbm", trControl = fitControl,preProcess = c("center", "scale"), tuneGrid = gbmGrid,verbose=FALSE)
+
+gbFitBL
+
+
+ggplot(gbFitBL)+ labs(title = 'GBM Model Performance')    
+
+# Using the model to predict the BUILDINGID on the testing Data
+pred_gbBL <- predict(gbFitBL, wifiTest)
+
+plot(pred_gbBL)
+confusionMatrix(data=wifiTest$BUILDINGID, reference = pred_gbBL)
+saveRDS(gbFitBL, file = "gbBL.rds")
+```
+
+
+```{r}
+set.seed(123)
+
+gbmGrid <-  expand.grid(interaction.depth = c(1,2,3), 
+                        n.trees = (1:4)*50, 
+                        shrinkage = 0.1,
+                        n.minobsinnode = 10)
+
+gbFitFL <- train(FLOOR~. ,data=wifiTrain2, method = "gbm", trControl = fitControl,preProcess = c("center", "scale"), tuneGrid = gbmGrid,verbose=FALSE)
+
+gbFitFL
+
+
+ggplot(gbFitFL)+ labs(title = 'GBM Model Performance') 
+
+# Using the model to predict the FLOOR on the testing Data
+pred_gbFL <- predict(gbFitFL, wifiTest2)
+
+plot(pred_gbFL)
+confusionMatrix(data=wifiTest2$FLOOR, reference = pred_gbFL)
+saveRDS(gbFitFL, file = "gbFL.rds")
+```
+
+
+```{r}
+set.seed(123)
+
+gbmGrid <-  expand.grid(interaction.depth = c(1,2,3), 
+                        n.trees = (1:4)*50, 
+                        shrinkage = 0.1,
+                        n.minobsinnode = 10)
+
+gbFitLAT <- train(LATITUDE~. ,data=wifiTrain3, method = "gbm", trControl = fitControl,preProcess = c("center", "scale"), tuneGrid = gbmGrid,verbose=FALSE)
+
+gbFitLAT
+
+
+ggplot(gbFitLAT)+ labs(title = 'GBM Model Performance LAT') 
+
+pred_gbLAT <- predict(gbFitLAT, wifiTest3)
+
+RMSE(pred = pred_gbLAT,wifiTest3$LATITUDE)
+MAE(pred = pred_gbLAT,wifiTest3$LATITUDE)
+cor(wifiTest3$LATITUDE,pred_gbLAT)
+saveRDS(gbFitLAT, file = "gbLAT.rds")
+```
+
+
+```{r}
+set.seed(123)
+
+gbmGrid <-  expand.grid(interaction.depth = c(1,2,3), 
+                        n.trees = (1:4)*50, 
+                        shrinkage = 0.1,
+                        n.minobsinnode = 10)
+
+gbFitLONG <- train(LONGITUDE~. ,data=wifiTrain4, method = "gbm", trControl = fitControl,preProcess = c("center", "scale"), tuneGrid = gbmGrid,verbose=FALSE)
+
+gbFitLONG
+
+
+ggplot(gbFitLONG)+ labs(title = 'GBM Model Performance') 
+
+pred_gbLONG <- predict(gbFitLONG, wifiTest4)
+
+RMSE(pred = pred_gbLONG,wifiTest4$LONGITUDE)
+MAE(pred = pred_gbLONG,wifiTest4$LONGITUDE)
+cor(wifiTest4$LONGITUDE,pred_gbLONG)
+saveRDS(gbFitLONG, file = "gbLONG.rds")
+```
+
+```{r}
+#XGB
+
+set.seed(123)
+
+GridXGB =  expand.grid(nrounds = c(50,100,150,200,250),
+                            max_depth = c(5),
+                            eta = c(0.05, 0.1, 0.15),#learning rate
+                            gamma = c(0),
+                            colsample_bytree = c(0.8),
+                            min_child_weight = c(5),
+                            subsample = c(0.8)
+                           )
+
+XGB_BL <- train(BUILDINGID~. ,data=wifiTrain, method = "xgbTree", trControl = fitControl,tuneGrid = GridXGB,verbose=FALSE,verbosity = 0)
+
+XGB_BL
+
+
+ggplot(XGB_BL)+ labs(title = 'xGBTree Model Performance')    
+saveRDS(XGB_BL, file = "XgbBUILD.rds")
+```
+
+
+```{r}
+set.seed(123)
+
+
+XGB_FL <- train(FLOOR~. ,data=wifiTrain2, method = "xgbTree", trControl = fitControl,tuneGrid = GridXGB,verbose=FALSE,verbosity = 0)
+
+XGB_FL
+
+
+ggplot(XGB_FL)+ labs(title = 'xGBTree Model Performance FLOOR')    
+saveRDS(XGB_FL, file = "XgbFLOOR.rds")
+```
+
+
+```{r}
+set.seed(123)
+
+
+XGB_LAT <- train(LATITUDE~. ,data=wifiTrain3, method = "xgbTree", trControl = fitControl,tuneGrid = GridXGB,verbose=FALSE,verbosity = 0)
+
+XGB_LAT
+
+
+ggplot(XGB_LAT)+ labs(title = 'xGBTree Model Performance LAT')
+saveRDS(XGB_LAT, file = "XgbLAT.rds")
+```
+
+```{r}
+set.seed(123)
+
+
+XGB_LONG <- train(LONGITUDE~. ,data=wifiTrain4, method = "xgbTree", trControl = fitControl,tuneGrid = GridXGB,verbose=FALSE,verbosity = 0)
+
+XGB_LONG
+
+
+ggplot(XGB_LONG)+ labs(title = 'xGBTree Model Performance LONG')
+saveRDS(XGB_LONG, file = "XgbLONG.rds")
+```
+#Comapre results FOR BUILDINGID
+
+```{r}
+compareBL <- resamples(list(KNN=knn_build, GBM=gbFitBL, XGB=XGB_BL))
+
+summary(compareBL)
+```
+#Compare results for FLOOR
+
+```{r}
+compareFL <- resamples(list(KNN=knn_buildFL, GBM=gbFitFL, XGB=XGB_FL))
+
+summary(compareFL)
+```
+#Compare results FOR LATITUDE
+
+```{r}
+compareLAT <- resamples(list(KNN=knn_buildLT, GBM=gbFitLAT, XGB=XGB_LAT))
+
+summary(compareLAT)
+```
+#Compare results for LONGITUDE
+
+```{r}
+compareLONG <- resamples(list(KNN=knn_buildLG, GBM=gbFitLONG, XGB=XGB_LONG))
+
+summary(compareLONG)
+```
+#Dowload.....
+
+```{r}
+#WifiVData <- read.csv("validationData.csv")
+
+factors <-c("SPACEID","USERID","PHONEID","RELATIVEPOSITION", "BUILDINGID","FLOOR")
+
+WifiVData[, factors] <-lapply(WifiVData[, factors], as.factor)
+
+numeric <-c("LONGITUDE", "LATITUDE")
+WifiVData[,numeric]<-lapply(WifiVData[,numeric],as.numeric)
+
+#Convert Timestamp to DateTime
+WifiVData$TIMESTAMP <- as_datetime(WifiVData$TIMESTAMP,origin  =  "1970-01-01",tz = "GMT")
+
+#change value of WAPs =100 to WAPs =-105
+
+WAPS<-grep("WAP",names(WifiVData),value = TRUE)
+WifiVData[,WAPS] <- sapply(WifiVData[,WAPS],function(x) ifelse(x==100,-105,x))
+
+
+```
+
+
+```{r}
+#function to get the absolute value of the difference of position x and the minimum position 
+WifiVData_Prep<-copy(WifiVData)
+getRelativeCoord = function(x,y){
+  return(abs(x-y))
+}
+
+#Normalizing Longitude and Latitude to Relative coordinates in relative to the minimum values of Lat and Long
+
+longMin = min(WifiVData$LONGITUDE)
+latMin = min(WifiVData$LATITUDE)
+
+WifiVData$RelativeLongitude <-WifiVData$LONGITUDE -longMin
+WifiVData$RelativeLatitude <- WifiVData$LATITUDE -latMin
+
+WifiVData_Prep$LATITUDE =  apply(WifiVData%>%select(., LATITUDE),1,getRelativeCoord, y=latMin)
+WifiVData_Prep$LONGITUDE = apply(WifiVData%>%select(.,LONGITUDE),1,getRelativeCoord, y=longMin)
+
+```
+
+
+
+```{r}
+train_col = names(WifiTData_Prep%>%select(starts_with('WAP')))
+
+test_col = names(WifiVData_Prep%>%select(starts_with('WAP')))
+wapsTokeep = intersect(test_col,train_col)
+
+
+test_Prep =WifiVData_Prep%>%select(matches(wapsTokeep),BUILDINGID,FLOOR,LATITUDE,LONGITUDE)
+```
+
+
+
+```{r}
+Test_Predictors = test_Prep%>%select(starts_with('WAP'))
+Test_target = test_Prep%>%select(BUILDINGID,FLOOR,LATITUDE,LONGITUDE)
+
+#Perform PCA on test_prep
+PCA_Test = predict(pca2, newdata = Test_Predictors)
+
+testSet = cbind(PCA_Test[,1:72],Test_target)
+```
+
+
+```{r}
+#Buildingid for final test
+knn_build100 <- train(BUILDINGID ~., data = pca_buildings,method = "knn",trControl = fitControl
+                   ,tuneGrid =expand.grid(k=c(1,3)))
+print(knn_build100)
+predict_BUILD <- predict(knn_build100, newdata = testSet%>%select(starts_with('PC'),BUILDINGID))
+confusionMatrix(testSet$BUILDINGID,reference = predict_BUILD)
+
+```
+
+
+```{r}
+#Floor for final test
+knn_buildFL100 <- train(FLOOR ~., data = pca_floors,method = "knn",trControl = fitControl
+                   ,tuneGrid =expand.grid(k=c(1,3)))
+print(knn_buildFL100)
+predict_FLOOR <- predict(knn_buildFL100, newdata = testSet%>%select(starts_with('PC'),FLOOR))
+confusionMatrix(testSet$FLOOR,reference = predict_FLOOR)
+```
+
+
+```{r}
+#LATITUDE for final test
+knn_buildLT100 <- train(LATITUDE ~., data = pca_lat,method = "knn",trControl = fitControl
+                   ,tuneGrid =expand.grid(k=c(1,3)))
+print(knn_buildLT100)
+predict_LAT <- predict(knn_buildLT100, newdata = testSet%>%select(starts_with('PC'),LATITUDE))
+RMSE(pred = predict_LAT,testSet$LATITUDE)
+MAE(pred = predict_LAT,testSet$LATITUDE)
+cor(testSet$LATITUDE,predict_LAT)
+
+
+```
+
+```{r}
+#LONGITUDE for final test
+knn_buildLG100 <- train(LONGITUDE ~., data = pca_long,method = "knn",trControl = fitControl
+                   ,tuneGrid =expand.grid(k=c(1,3)))
+print(knn_buildLG100)
+predict_LONG <- predict(knn_buildLG100, newdata = testSet%>%select(starts_with('PC'),LONGITUDE))
+RMSE(pred = predict_LONG,testSet$LONGITUDE)
+MAE(pred = predict_LONG,testSet$LONGITUDE)
+cor(testSet$LONGITUDE,predict_LONG)
+```
+
+
+```{r}
+
+error_analysis <- data.frame(Build_real  = testSet$BUILDINGID,
+                        Floor_real  = testSet$FLOOR,
+                        Lat_real  = testSet$LATITUDE,
+                        Long_real  = testSet$LONGITUDE,
+                        pred_BuildingId = predict_BUILD,
+                             pred_Floor = predict_FLOOR,
+                             pred_Latitude = predict_LAT,
+                             pred_Longitude = predict_LONG)
+
+error_analysis$abs_Building = abs(as.numeric(error_analysis$Build_real) - as.numeric(error_analysis$pred_BuildingId))
+
+error_analysis$abs_Floor = abs(as.numeric(error_analysis$Floor_real) - as.numeric(error_analysis$pred_Floor))
+
+error_analysis$abs_Lat = abs(error_analysis$Lat_real - error_analysis$pred_Latitude)
+
+error_analysis$abs_Long = abs(error_analysis$Long_real - error_analysis$pred_Longitude)
+
+error_analysis$distance = sqrt(error_analysis$abs_Lat ^ 2 + error_analysis$abs_Long ^ 2)
+
+error_analysis$error = error_analysis$distance + (4 * error_analysis$abs_Floor) + (50 * error_analysis$abs_Building)
+
+error_analysis
+
+
+
+plot_ly(testSet, x = ~testSet$LONGITUDE, y = ~knn_buildLG100,
+        type   = "scatter",
+        colors = c("blue", "pink","green")) %>%
+  layout(title = "Errors in Longitude for the Test set KNN")
+
+
+#error_analysis = data.frame(real_BuildingId = testSet$BUILDINGID,
+                             #real_Floor = testSetWAP$FLOOR,
+                             #real_Lat = testSetWAP$LATITUDE,
+                             #real_Long = testSet$LONGITUDE,
+                             #pred_BuildingId = building_pred,
+                             #pred_Floor = floor_pred,
+                             #pred_Latitude = lat_pred,
+                             #pred_Longitude = long_pred)
+
+#error_analysis$abs_Building = abs(as.numeric(error_analysis$real_BuildingId) - #as.numeric(error_analysis$pred_BuildingId))
+
+#error_analysis$abs_Floor = abs(as.numeric(error_analysis$real_Floor) - #as.numeric(error_analysis$pred_Floor))
+
+#error_analysis$abs_Lat = abs(error_analysis$real_Lat - error_analysis$pred_Latitude)
+
+#error_analysis$abs_Long = abs(error_analysis$real_Long - error_analysis$pred_Longitude)
+
+#error_analysis$distance = sqrt(error_analysis$abs_Lat ^ 2 + error_analysis$abs_Long ^ 2)
+
+#error_analysis$error = error_analysis$distance + (4 * error_analysis$abs_Floor) + (50 * #error_analysis$abs_Building)
+
+#error_analysis
+```
+
